@@ -34,7 +34,7 @@ input { background: #334155; color: white; }
 select { background: #334155; color: white; }
 button { background: #3b82f6; color: white; font-weight: bold; cursor: pointer; }
 button:disabled { background: #64748b; }
-#msg { margin-top: 15px; font-size: 14px; }
+#msg { margin-top: 15px; font-size: 14px; word-break: break-word; }
 </style>
 </head>
 <body>
@@ -58,7 +58,7 @@ const btn = document.getElementById('dlBtn');
 if(!url) { msg.innerHTML = '<span style="color: #f87171;">দয়া করে লিংক দিন!</span>'; return; }
 btn.disabled = true;
 btn.innerText = 'প্রসেসিং হচ্ছে, অপেক্ষা করুন...';
-msg.innerHTML = '<span style="color: #60a5fa;">ফাইল তৈরি হচ্ছে...</span>';
+msg.innerHTML = '<span style="color: #60a5fa;">ফাইল তৈরি হচ্ছে, একটু সময় লাগতে পারে...</span>';
 try {
 const res = await fetch('/api/download', {
 method: 'POST',
@@ -96,23 +96,34 @@ def home():
 @app.post("/api/download")
 def download_media(request: DownloadRequest, background_tasks: BackgroundTasks):
     url_str = str(request.url)
+    
+    # ইউটিউবের ব্লক এড়ানোর কনফিগারেশন
+    common_opts = {
+        'quiet': True,
+        'no_warnings': True,
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'web'],
+                'skip': ['hls', 'dash']
+            }
+        },
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36'
+        }
+    }
+
     if request.format_type == "audio":
         ydl_opts = {
-            'format': 'bestaudio/best',
+            **common_opts,
+            'format': 'ba/b',
             'outtmpl': f'{DOWNLOAD_DIR}/%(id)s.%(ext)s',
-            'postprocessors': [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
-                'preferredquality': '192',
-            }],
-            'quiet': True,
         }
-        target_ext = "mp3"
+        target_ext = "m4a"
     else:
         ydl_opts = {
-            'format': 'best[ext=mp4]/best',
+            **common_opts,
+            'format': 'b[ext=mp4]/best[ext=mp4]/best',
             'outtmpl': f'{DOWNLOAD_DIR}/%(id)s.%(ext)s',
-            'quiet': True,
         }
         target_ext = "mp4"
 
@@ -122,20 +133,23 @@ def download_media(request: DownloadRequest, background_tasks: BackgroundTasks):
             video_id = info_dict.get("id", "media")
             video_title = info_dict.get("title", "download")
 
-            downloaded_file = os.path.join(DOWNLOAD_DIR, f"{video_id}.{target_ext}")
-            if not os.path.exists(downloaded_file):
+            # নামানো ফাইলের আসল পাথ খোঁজা
+            matched_file = None
+            if os.path.exists(DOWNLOAD_DIR):
                 for f in os.listdir(DOWNLOAD_DIR):
                     if f.startswith(video_id):
-                        downloaded_file = os.path.join(DOWNLOAD_DIR, f)
+                        matched_file = os.path.join(DOWNLOAD_DIR, f)
                         break
 
-            if not os.path.exists(downloaded_file):
+            if not matched_file or not os.path.exists(matched_file):
                 raise HTTPException(status_code=500, detail="ফাইল তৈরি করা সম্ভব হয়নি।")
 
-            background_tasks.add_task(cleanup_file, downloaded_file)
-            clean_filename = f"{video_title[:30]}.{target_ext}".replace("/", "_")
+            ext = os.path.splitext(matched_file)[1]
+            background_tasks.add_task(cleanup_file, matched_file)
+            
+            clean_filename = f"{video_title[:30]}{ext}".replace("/", "_").replace("\\", "_")
             return FileResponse(
-                path=downloaded_file,
+                path=matched_file,
                 filename=clean_filename,
                 media_type='application/octet-stream'
             )
